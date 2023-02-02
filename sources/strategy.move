@@ -4,10 +4,13 @@ module satay_product::strategy {
 
     use satay_product::product::{Self, ProductCoin};
 
-    use satay::base_strategy;
     use satay_vault_coin::vault_coin::VaultCoin;
 
+    use satay::base_strategy;
+    use satay::vault;
 
+    /// used as StrategyType in vault operations
+    /// part of witness pattern implementation
     struct StrategyWitness has drop {}
 
     // vault manager functions
@@ -46,6 +49,9 @@ module satay_product::strategy {
         );
     }
 
+    /// sets the debt ratio of the strategy to 0
+    /// @param vault_manager - the transaction signer; must be the vault manager of vault_id
+    /// @param vault_id - the vault to set the debt ratio on
     public entry fun revoke(
         vault_manager: &signer,
         vault_id: u64
@@ -55,6 +61,9 @@ module satay_product::strategy {
 
     // keeper functions
 
+    /// Harvests the strategy, recognizing any profits or losses and adjusting the strategy's position.
+    /// @param keeper - the transaction signer; must be the keeper of vault_id
+    /// @param vault_id - the vault to harvest
     public entry fun harvest<BaseCoin>(
         keeper: &signer,
         vault_id: u64
@@ -68,18 +77,15 @@ module satay_product::strategy {
             StrategyWitness {}
         );
 
-        let product_coins = product::tend<BaseCoin>(keeper);
-        base_strategy::deposit_strategy_coin<StrategyWitness, ProductCoin<BaseCoin>>(
-            &keeper_cap,
-            product_coins
-        );
+        let product_coin_balance = vault::harvest_balance<StrategyWitness, ProductCoin<BaseCoin>>(&keeper_cap);
+        let base_coin_balance = product::calc_base_coin_amount<BaseCoin>(product_coin_balance);
 
         let (
             to_apply,
             harvest_lock
         ) = base_strategy::process_harvest<StrategyWitness, BaseCoin, ProductCoin<BaseCoin>>(
             &keeper_cap,
-            vault_id,
+            base_coin_balance,
             vault_cap_lock
         );
 
@@ -88,7 +94,7 @@ module satay_product::strategy {
         let debt_payment_amount = base_strategy::get_harvest_debt_payment(&harvest_lock);
         let profit_amount = base_strategy::get_harvest_profit(&harvest_lock);
 
-        let to_liquidate_amount = product::calc_product_coin_amount(debt_payment_amount + profit_amount);
+        let to_liquidate_amount = product::calc_product_coin_amount<BaseCoin>(debt_payment_amount + profit_amount);
         let to_liquidate = base_strategy::withdraw_strategy_coin<StrategyWitness, ProductCoin<BaseCoin>>(
             &keeper_cap,
             to_liquidate_amount
@@ -108,6 +114,9 @@ module satay_product::strategy {
         );
     }
 
+    /// reinvest accrued rewards
+    /// @param keeper - the transaction signer; must be the keeper of vault_id
+    /// @param vault_id - the vault to reinvest rewards on
     public entry fun tend<BaseCoin>(
         keeper: &signer,
         vault_id: u64
@@ -120,16 +129,20 @@ module satay_product::strategy {
             vault_id,
             StrategyWitness {}
         );
-        let product_coins = product::tend<BaseCoin>(keeper);
+        product::tend<BaseCoin>(keeper);
         base_strategy::close_vault_for_tend<StrategyWitness, ProductCoin<BaseCoin>>(
             keeper_cap,
             tend_lock,
-            product_coins
+            coin::zero()
         )
     }
 
     // user functions
 
+    /// liquidate strategy position if vault does not have enough liqidity for amount of VaultCoin<BaseCoin>
+    /// @param user - the transaction signer; must hold amount of VaultCoin<BaseCoin>
+    /// @param vault_id - the vault to liquidate
+    /// @param amount - the amount of VaultCoin<BaseCoin> to liquidate
     public entry fun withdraw_for_user<BaseCoin>(
         user: &signer,
         vault_id: u64,
@@ -147,7 +160,7 @@ module satay_product::strategy {
         );
 
         let amount_needed = base_strategy::get_user_withdraw_amount_needed(&user_withdraw_lock);
-        let product_coin_amount = product::calc_product_coin_amount(amount_needed);
+        let product_coin_amount = product::calc_product_coin_amount<BaseCoin>(amount_needed);
         let product_coins = base_strategy::withdraw_strategy_coin_for_liquidation<StrategyWitness, ProductCoin<BaseCoin>, BaseCoin>(
             &user_cap,
             product_coin_amount,
