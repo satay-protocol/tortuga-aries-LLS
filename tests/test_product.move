@@ -14,13 +14,15 @@ module satay_product::test_product {
 
     const ERR_INITIALIZE: u64 = 1;
 
+    struct TestProduct has drop {}
+
     fun setup_tests(
         aptos_framework: &signer,
         satay_product: &signer,
         user: &signer,
     ) {
         stake::initialize_for_test(aptos_framework);
-        product::initialize<AptosCoin>(satay_product);
+        product::initialize<TestProduct, AptosCoin>(satay_product);
 
         let user_addr = signer::address_of(user);
         account::create_account_for_test(user_addr);
@@ -39,7 +41,7 @@ module satay_product::test_product {
         user: &signer,
     ) {
         setup_tests(aptos_framework, deployer, user);
-        let product_addr = product::product_account_address<AptosCoin>();
+        let product_addr = product::product_account_address<TestProduct, AptosCoin>();
         assert!(coin::is_account_registered<AptosCoin>(product_addr), ERR_INITIALIZE);
     }
 
@@ -54,7 +56,7 @@ module satay_product::test_product {
         user: &signer
     ) {
         setup_tests(aptos_framework, deployer, user);
-        product::deposit<AptosCoin>(user, DEPOSIT_AMOUNT);
+        product::deposit<TestProduct, AptosCoin>(user, DEPOSIT_AMOUNT);
     }
 
     #[test(
@@ -68,8 +70,8 @@ module satay_product::test_product {
         user: &signer
     ) {
         setup_tests(aptos_framework, deployer, user);
-        product::deposit<AptosCoin>(user, DEPOSIT_AMOUNT);
-        product::withdraw<AptosCoin>(user, DEPOSIT_AMOUNT);
+        product::deposit<TestProduct, AptosCoin>(user, DEPOSIT_AMOUNT);
+        product::withdraw<TestProduct, AptosCoin>(user, DEPOSIT_AMOUNT);
     }
 
     #[test(
@@ -83,8 +85,8 @@ module satay_product::test_product {
         user: &signer
     ) {
         setup_tests(aptos_framework, deployer, user);
-        product::deposit<AptosCoin>(user, DEPOSIT_AMOUNT);
-        product::tend<AptosCoin>(deployer);
+        product::deposit<TestProduct, AptosCoin>(user, DEPOSIT_AMOUNT);
+        product::tend<TestProduct, AptosCoin>(deployer);
     }
 
 

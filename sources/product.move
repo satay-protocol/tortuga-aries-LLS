@@ -27,20 +27,20 @@ module satay_product::product {
     const SYMBOL_PREFIX: vector<u8> = b"p";
 
     /// replace this with the unique product coin name
-    struct ProductCoin<phantom BaseCoin> {}
+    struct ProductCoin<phantom ProductType: drop, phantom BaseCoin> {}
 
-    struct ProductAccount<phantom BaseCoin> has key {
+    struct ProductAccount<phantom ProductType: drop, phantom BaseCoin> has key {
         signer_cap: SignerCapability,
         manager_address: address,
-        mint_cap: MintCapability<ProductCoin<BaseCoin>>,
-        burn_cap: BurnCapability<ProductCoin<BaseCoin>>,
+        mint_cap: MintCapability<ProductCoin<ProductType, BaseCoin>>,
+        burn_cap: BurnCapability<ProductCoin<ProductType, BaseCoin>>,
     }
 
     // deployer functions
 
     /// initialize the product account
     /// @param deployer - the transaction signer; must be the module deployer
-    public entry fun initialize<BaseCoin>(deployer: &signer) {
+    public entry fun initialize<ProductType: drop, BaseCoin>(deployer: &signer) {
         // assert that the deployer is calling initialize
         assert_deployer(deployer);
 
@@ -57,7 +57,7 @@ module satay_product::product {
             burn_cap,
             freeze_cap,
             mint_cap
-        ) = coin::initialize<ProductCoin<BaseCoin>>(
+        ) = coin::initialize<ProductCoin<ProductType, BaseCoin>>(
             deployer,
             name,
             symbol,
@@ -89,19 +89,19 @@ module satay_product::product {
     /// mint product coins
     /// @param user - the transaction signer; must hold amount of BaseCoin
     /// @param amount - the amount of BaseCoin to be converted to ProductCoin
-    public entry fun deposit<BaseCoin>(user: &signer, amount: u64)
+    public entry fun deposit<ProductType: drop, BaseCoin>(user: &signer, amount: u64)
     acquires ProductAccount {
         let base_coins = coin::withdraw<BaseCoin>(user, amount);
         let product_coins = apply(base_coins);
-        safe_deposit<ProductCoin<BaseCoin>>(user, product_coins);
+        safe_deposit<ProductCoin<ProductType, BaseCoin>>(user, product_coins);
     }
 
     /// burn product coins
     /// @param user - the transaction signer; must hold amount of ProductCoin
     /// @param amount - the amount of ProductCoin to be converted to BaseCoin
-    public entry fun withdraw<BaseCoin>(user: &signer, amount: u64)
+    public entry fun withdraw<ProductType: drop, BaseCoin>(user: &signer, amount: u64)
     acquires ProductAccount {
-        let product_coins = coin::withdraw<ProductCoin<BaseCoin>>(user, amount);
+        let product_coins = coin::withdraw<ProductCoin<ProductType, BaseCoin>>(user, amount);
         let base_coins = liquidate(product_coins);
         safe_deposit<BaseCoin>(user, base_coins);
     }
@@ -110,25 +110,30 @@ module satay_product::product {
 
     /// convert base coins to product coins
     /// @param base_coins - the base coins to convert
-    public fun apply<BaseCoin>(base_coins: Coin<BaseCoin>): Coin<ProductCoin<BaseCoin>>
+    public fun apply<ProductType: drop, BaseCoin>(base_coins: Coin<BaseCoin>): Coin<ProductCoin<ProductType, BaseCoin>>
     acquires ProductAccount {
-        assert_product_initialized<BaseCoin>();
-        let product_account = borrow_global<ProductAccount<BaseCoin>>(@satay_product);
+        assert_product_initialized<ProductType, BaseCoin>();
         let base_coin_amount = coin::value(&base_coins);
+        let mint_amount = calc_product_coin_amount<ProductType, BaseCoin>(base_coin_amount);
+        let product_account = borrow_global<ProductAccount<ProductType, BaseCoin>>(@satay_product);
         coin::deposit(account::get_signer_capability_address(&product_account.signer_cap), base_coins);
-        coin::mint(base_coin_amount, &product_account.mint_cap)
+        coin::mint(mint_amount, &product_account.mint_cap)
     }
 
     /// convert product coins to base coins
     /// @param product_coins - the product coins to convert
-    public fun liquidate<BaseCoin>(product_coins: Coin<ProductCoin<BaseCoin>>): Coin<BaseCoin>
+    public fun liquidate<ProductType: drop, BaseCoin>(product_coins: Coin<ProductCoin<ProductType, BaseCoin>>): Coin<BaseCoin>
     acquires ProductAccount {
-        assert_product_initialized<BaseCoin>();
-        let product_account = borrow_global<ProductAccount<BaseCoin>>(@satay_product);
-        let product_signer = account::create_signer_with_capability(&product_account.signer_cap);
+        assert_product_initialized<ProductType, BaseCoin>();
+
         let product_coin_amount = coin::value(&product_coins);
+        let base_coin_amount = calc_base_coin_amount<ProductType, BaseCoin>(product_coin_amount);
+
+        let product_account = borrow_global<ProductAccount<ProductType, BaseCoin>>(@satay_product);
+        let product_signer = account::create_signer_with_capability(&product_account.signer_cap);
+
         coin::burn(product_coins, &product_account.burn_cap);
-        coin::withdraw<BaseCoin>(&product_signer, product_coin_amount)
+        coin::withdraw<BaseCoin>(&product_signer, base_coin_amount)
     }
 
     // admin
@@ -136,19 +141,19 @@ module satay_product::product {
     /// set the manager address
     /// @param manager - the transaction signer; must be the current manager
     /// @param new_manager - the new manager address
-    public entry fun set_manager<BaseCoin>(manager: &signer, new_manager: address)
+    public entry fun set_manager<ProductType: drop, BaseCoin>(manager: &signer, new_manager: address)
     acquires ProductAccount {
-        assert_manager<BaseCoin>(manager);
-        borrow_global_mut<ProductAccount<BaseCoin>>(signer::address_of(manager)).manager_address = new_manager;
+        assert_manager<ProductType, BaseCoin>(manager);
+        borrow_global_mut<ProductAccount<ProductType, BaseCoin>>(signer::address_of(manager)).manager_address = new_manager;
     }
 
     /// claim rewards and reinvest
     /// @param user - the transaction signer; must hold > 0 ProductCoin
-    public entry fun tend<BaseCoin>(manager: &signer)
+    public entry fun tend<ProductType: drop, BaseCoin>(manager: &signer)
     acquires ProductAccount {
-        assert_manager<BaseCoin>(manager);
+        assert_manager<ProductType, BaseCoin>(manager);
         let returns = coin::zero<BaseCoin>();
-        let product_address = product_account_address<BaseCoin>();
+        let product_address = product_account_address<ProductType, BaseCoin>();
         coin::deposit<BaseCoin>(product_address, returns);
     }
 
@@ -156,25 +161,32 @@ module satay_product::product {
 
     /// calculate the amount of product coins that can be minted for a given amount of base coins
     /// @param product_coin_amount - the amount of ProductCoin<BaseCoin> to be converted
-    public fun calc_base_coin_amount<BaseCoin>(product_coin_amount: u64): u64
+    public fun calc_base_coin_amount<ProductType: drop, BaseCoin>(product_coin_amount: u64): u64
     acquires ProductAccount {
-        let product_account_address = product_account_address<BaseCoin>();
-        let product_coin_supply = coin::supply<ProductCoin<BaseCoin>>();
+        let product_account_address = product_account_address<ProductType, BaseCoin>();
+        let product_coin_supply_option = coin::supply<ProductCoin<ProductType, BaseCoin>>();
         let base_coin_holdings = coin::balance<BaseCoin>(product_account_address);
+        let product_coin_supply = option::get_with_default(&product_coin_supply_option, 0);
+        if(product_coin_supply == 0) {
+            return product_coin_amount
+        };
         math::calculate_proportion_of_u64_with_u128_denominator(
             base_coin_holdings,
             product_coin_amount,
-            option::get_with_default(&product_coin_supply, 0),
+            product_coin_supply,
         )
     }
 
     /// calculate the amount of base coins that can be liquidated for a given amount of product coins
     /// @param base_coin_amount - the amount of BaseCoin to be converted
-    public fun calc_product_coin_amount<BaseCoin>(base_coin_amount: u64): u64
+    public fun calc_product_coin_amount<ProductType: drop, BaseCoin>(base_coin_amount: u64): u64
     acquires ProductAccount {
-        let product_account_address = product_account_address<BaseCoin>();
-        let product_coin_supply = coin::supply<ProductCoin<BaseCoin>>();
+        let product_account_address = product_account_address<ProductType, BaseCoin>();
+        let product_coin_supply = coin::supply<ProductCoin<ProductType, BaseCoin>>();
         let base_coin_holdings = coin::balance<BaseCoin>(product_account_address);
+        if(base_coin_holdings == 0) {
+            return base_coin_amount
+        };
         math::mul_u128_u64_div_u64_result_u64(
             option::get_with_default(&product_coin_supply, 0),
             base_coin_amount,
@@ -184,6 +196,9 @@ module satay_product::product {
 
     // helpers
 
+    /// deposit CoinType to user, register if necessary
+    /// @param user - the transaction signer
+    /// @param product_coins - the coins to deposit
     fun safe_deposit<CoinType>(user: &signer, product_coins: Coin<CoinType>) {
         if (coin::is_account_registered<CoinType>(signer::address_of(user))) {
             coin::deposit<CoinType>(signer::address_of(user), product_coins);
@@ -196,10 +211,10 @@ module satay_product::product {
     // getters
 
     /// gets the address of the product account for BaseCoin
-    public fun product_account_address<BaseCoin>(): address
+    public fun product_account_address<ProductType: drop, BaseCoin>(): address
     acquires ProductAccount {
-        assert_product_initialized<BaseCoin>();
-        let product_account = borrow_global<ProductAccount<BaseCoin>>(@satay_product);
+        assert_product_initialized<ProductType, BaseCoin>();
+        let product_account = borrow_global<ProductAccount<ProductType, BaseCoin>>(@satay_product);
         account::get_signer_capability_address(&product_account.signer_cap)
     }
 
@@ -211,15 +226,15 @@ module satay_product::product {
         assert!(signer::address_of(deployer) == @satay_product, ERR_NOT_DEPLOYER);
     }
 
-    fun assert_product_initialized<BaseCoin>() {
-        assert!(exists<ProductAccount<BaseCoin>>(@satay_product), ERR_NOT_INITIALIZED)
+    fun assert_product_initialized<ProductType: drop, BaseCoin>() {
+        assert!(exists<ProductAccount<ProductType, BaseCoin>>(@satay_product), ERR_NOT_INITIALIZED)
     }
 
     /// asserts that the transaction signer is the manager of the product
     /// @param manager - must be the manager of the product
-    fun assert_manager<BaseCoin>(manager: &signer) acquires ProductAccount {
-        assert_product_initialized<BaseCoin>();
-        let product_account = borrow_global<ProductAccount<BaseCoin>>(@satay_product);
+    fun assert_manager<ProductType: drop, BaseCoin>(manager: &signer) acquires ProductAccount {
+        assert_product_initialized<ProductType, BaseCoin>();
+        let product_account = borrow_global<ProductAccount<ProductType, BaseCoin>>(@satay_product);
         assert!(signer::address_of(manager) == product_account.manager_address, ERR_NOT_MANAGER);
     }
 }
