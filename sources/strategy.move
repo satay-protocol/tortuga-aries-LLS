@@ -19,16 +19,16 @@ module satay_product::strategy {
 
     // governance functions
 
-    /// initialize MockStrategy for BaseCoin
-    /// * governance: &signer - must have the governance role account on satay::global_config
+    /// initialize StrategyCapability<BaseCoin, MockStrategy> and StrategyCoin<BaseCoin, MockStrategy>
+    /// * governance: &signer - must have the governance role on satay::global_config
     public entry fun initialize<BaseCoin>(governance: &signer) {
         satay::new_strategy<BaseCoin, MockStrategy>(governance, MockStrategy {});
     }
 
     // strategy manager functions
 
-    /// claim rewards, convert to BaseCoin, and deposit into the strategy
-    /// * strategy_manager: &signer - must have the strategy manager role account on satay::stragey_config
+    /// claim rewards, convert to BaseCoin, and deposit back into the strategy
+    /// * strategy_manager: &signer - must have the strategy manager role account on satay::strategy_config
     public entry fun tend<BaseCoin>(strategy_manager: &signer) {
         strategy_config::assert_strategy_manager<BaseCoin, MockStrategy>(
             strategy_manager,
@@ -42,7 +42,7 @@ module satay_product::strategy {
 
     // user functions
 
-    /// deposit BaseCoin into the strategy for user, mint StrategyCoin in return
+    /// deposit BaseCoin into the strategy for user, mint StrategyCoin<BaseCoin, MockStrategy> in return
     /// * user: &signer - must hold amount of BaseCoin
     /// * amount: u64 - the amount of BaseCoin to deposit
     public entry fun deposit<BaseCoin>(user: &signer, amount: u64) {
@@ -54,16 +54,16 @@ module satay_product::strategy {
         coin::deposit(signer::address_of(user), strategy_coins);
     }
 
-    /// burn StrategyCoin for user, withdraw BaseCoin from the strategy in return
-    /// * user: &signer - must hold amount of StrategyCoin
-    /// * amount: u64 - the amount of StrategyCoin to burn
+    /// burn StrategyCoin<BaseCoin, MockStrategy> for user, withdraw BaseCoin from the strategy in return
+    /// * user: &signer - must hold amount of StrategyCoin<BaseCoin, MockStrategy>
+    /// * amount: u64 - the amount of StrategyCoin<BaseCoin, MockStrategy> to burn
     public entry fun withdraw<BaseCoin>(user: &signer, amount: u64) {
         let strategy_coins = coin::withdraw<StrategyCoin<AptosCoin, MockStrategy>>(user, amount);
         let aptos_coins = liquidate(strategy_coins);
         coin::deposit(signer::address_of(user), aptos_coins);
     }
 
-    /// convert BaseCoin into StrategyCoin
+    /// convert BaseCoin into StrategyCoin<BaseCoin, MockStrategy>
     /// * base_coins: Coin<BaseCoin> - the BaseCoin to convert
     public fun apply<BaseCoin>(base_coins: Coin<BaseCoin>): Coin<StrategyCoin<BaseCoin, MockStrategy>> {
         let base_coin_value = coin::value(&base_coins);
@@ -71,7 +71,7 @@ module satay_product::strategy {
         satay::strategy_mint<BaseCoin, MockStrategy>(base_coin_value, MockStrategy {})
     }
 
-    /// convert StrategyCoin into BaseCoin
+    /// convert StrategyCoin<BaseCoin, MockStrategy> into BaseCoin
     /// * strategy_coins: Coin<StrategyCoin<BaseCoin, MockStrategy>> - the StrategyCoin to convert
     public fun liquidate<BaseCoin>(strategy_coins: Coin<StrategyCoin<BaseCoin, MockStrategy>>): Coin<BaseCoin> {
         let strategy_coin_value = coin::value(&strategy_coins);

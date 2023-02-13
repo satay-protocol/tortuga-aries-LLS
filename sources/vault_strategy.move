@@ -12,14 +12,10 @@ module satay_product::vault_strategy {
 
     // vault manager functions
 
-    /// initializes strategy on vault_id
-    /// @param vault_manager - the transaction signer; must be the vault manager of vault_id
-    /// @param vault_id - the vault to initialize strategy on
-    /// @param debt_ratio - the initial debt ratio of the strategy
-    public entry fun initialize<BaseCoin>(
-        vault_manager: &signer,
-        debt_ratio: u64
-    ) {
+    /// approves the strategy on Vault<BaseCoin>
+    /// * vault_manager: &signer - must have the vault manager role for Vault<BaseCoin>
+    /// * debt_ratio: u64 - in BPS
+    public entry fun approve<BaseCoin>(vault_manager: &signer, debt_ratio: u64) {
         base_strategy::approve_strategy<BaseCoin, MockStrategy>(
             vault_manager,
             debt_ratio,
@@ -27,10 +23,9 @@ module satay_product::vault_strategy {
         );
     }
 
-    /// sets the debt ratio of the strategy
-    /// @param vault_manager - the transaction signer; must be the vault manager of vault_id
-    /// @param vault_id - the vault to set the debt ratio on
-    /// @param debt_ratio - the new debt ratio of the strategy
+    /// updates the debt ratio of the strategy on Vault<BaseCoin>
+    /// * vault_manager: &signer - must have the vault manager role for Vault<BaseCoin>
+    /// * debt_ratio: u64 - in BPS
     public entry fun update_debt_ratio<BaseCoin>(vault_manager: &signer, debt_ratio: u64) {
         base_strategy::update_debt_ratio<BaseCoin, MockStrategy>(
             vault_manager,
@@ -40,17 +35,15 @@ module satay_product::vault_strategy {
     }
 
     /// sets the debt ratio of the strategy to 0
-    /// @param vault_manager - the transaction signer; must be the vault manager of vault_id
-    /// @param vault_id - the vault to set the debt ratio on
+    /// * vault_manager: &signer - must have the vault manager role for Vault<BaseCoin>
     public entry fun revoke<BaseCoin>(vault_manager: &signer) {
         update_debt_ratio<BaseCoin>(vault_manager, 0);
     }
 
     // keeper functions
 
-    /// Harvests the strategy, recognizing any profits or losses and adjusting the strategy's position.
-    /// @param keeper - the transaction signer; must be the keeper of vault_id
-    /// @param vault_id - the vault to harvest
+    /// harvests the strategy, recognizing any profits or losses and adjusting the strategy's position
+    /// * keeper: &signer - must be the keeper for the strategy on Vault<BaseCoin>
     public entry fun harvest<BaseCoin>(keeper: &signer) {
 
         let product_coin_balance = satay::get_vault_balance<BaseCoin, StrategyCoin<BaseCoin, MockStrategy>>();
@@ -91,10 +84,9 @@ module satay_product::vault_strategy {
 
     // user functions
 
-    /// liquidate strategy position if vault does not have enough liqidity for amount of VaultCoin<BaseCoin>
-    /// @param user - the transaction signer; must hold amount of VaultCoin<BaseCoin>
-    /// @param vault_id - the vault to liquidate
-    /// @param amount - the amount of VaultCoin<BaseCoin> to liquidate
+    /// liquidate strategy position if vault does not have enough BaseCoin for amount of VaultCoin<BaseCoin>
+    /// * user: &signer - must hold amount of VaultCoin<BaseCoin>
+    /// * amount: u64 - the amount of VaultCoin<BaseCoin> to liquidate
     public entry fun withdraw_for_user<BaseCoin>(user: &signer, amount: u64) {
         let vault_coins = coin::withdraw<VaultCoin<BaseCoin>>(user, amount);
         let user_withdraw_lock = base_strategy::open_vault_for_user_withdraw<BaseCoin, MockStrategy>(
