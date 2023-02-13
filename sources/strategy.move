@@ -1,141 +1,127 @@
 module satay_product::strategy {
 
-    use aptos_framework::coin;
+    use std::signer;
 
-    use satay_product::product::{Self, ProductCoin};
+    use std::option;
 
-    use satay_vault_coin::vault_coin::VaultCoin;
+    use aptos_framework::coin::{Self, Coin};
+    use aptos_framework::aptos_coin::AptosCoin;
 
-    use satay::base_strategy;
+    use satay_coins::strategy_coin::StrategyCoin;
+
+    use satay::math;
     use satay::satay;
+    use satay::strategy_config;
 
-    /// used as StrategyType in vault operations
-    /// part of witness pattern implementation
-    struct StrategyWitness has drop {}
+    friend satay_product::vault_strategy;
 
-    // vault manager functions
+    struct MockStrategy has drop {}
 
-    /// initializes strategy on vault_id
-    /// @param vault_manager - the transaction signer; must be the vault manager of vault_id
-    /// @param vault_id - the vault to initialize strategy on
-    /// @param debt_ratio - the initial debt ratio of the strategy
-    public entry fun initialize<BaseCoin>(
-        vault_manager: &signer,
-        vault_id: u64,
-        debt_ratio: u64
-    ) {
-        base_strategy::initialize<StrategyWitness, ProductCoin<StrategyWitness, BaseCoin>>(
-            vault_manager,
-            debt_ratio,
-            vault_id,
-            StrategyWitness {}
-        );
+    // governance functions
+
+    /// initialize MockStrategy for BaseCoin
+    /// * governance: &signer - must have the governance role account on satay::global_config
+    public entry fun initialize<BaseCoin>(governance: &signer) {
+        satay::new_strategy<BaseCoin, MockStrategy>(governance, MockStrategy {});
     }
 
-    /// sets the debt ratio of the strategy
-    /// @param vault_manager - the transaction signer; must be the vault manager of vault_id
-    /// @param vault_id - the vault to set the debt ratio on
-    /// @param debt_ratio - the new debt ratio of the strategy
-    public entry fun update_debt_ratio(
-        vault_manager: &signer,
-        vault_id: u64,
-        debt_ratio: u64
-    ) {
-        base_strategy::update_debt_ratio<StrategyWitness>(
-            vault_manager,
-            debt_ratio,
-            vault_id,
-            StrategyWitness {}
+    // strategy manager functions
+
+    /// claim rewards, convert to BaseCoin, and deposit into the strategy
+    /// * strategy_manager: &signer - must have the strategy manager role account on satay::stragey_config
+    public entry fun tend<BaseCoin>(strategy_manager: &signer) {
+        strategy_config::assert_strategy_manager<BaseCoin, MockStrategy>(
+            strategy_manager,
+            get_strategy_account_address<BaseCoin>(),
         );
-    }
-
-    /// sets the debt ratio of the strategy to 0
-    /// @param vault_manager - the transaction signer; must be the vault manager of vault_id
-    /// @param vault_id - the vault to set the debt ratio on
-    public entry fun revoke(
-        vault_manager: &signer,
-        vault_id: u64
-    ) {
-        update_debt_ratio(vault_manager, vault_id, 0);
-    }
-
-    // keeper functions
-
-    /// Harvests the strategy, recognizing any profits or losses and adjusting the strategy's position.
-    /// @param keeper - the transaction signer; must be the keeper of vault_id
-    /// @param vault_id - the vault to harvest
-    public entry fun harvest<BaseCoin>(
-        keeper: &signer,
-        vault_id: u64
-    ) {
-
-        let product_coin_balance = satay::get_vault_balance<ProductCoin<StrategyWitness, BaseCoin>>(vault_id);
-        let base_coin_balance = product::calc_base_coin_amount<StrategyWitness, BaseCoin>(product_coin_balance);
-
-        let (
-            to_apply,
-            harvest_lock
-        ) = base_strategy::open_vault_for_harvest<StrategyWitness, BaseCoin, ProductCoin<StrategyWitness, BaseCoin>>(
-            keeper,
-            vault_id,
-            base_coin_balance,
-            StrategyWitness {}
-        );
-
-        let product_coins = product::apply<StrategyWitness, BaseCoin>(to_apply);
-
-        let debt_payment_amount = base_strategy::get_harvest_debt_payment(&harvest_lock);
-        let profit_amount = base_strategy::get_harvest_profit(&harvest_lock);
-
-        let to_liquidate_amount = product::calc_product_coin_amount<StrategyWitness, BaseCoin>(debt_payment_amount + profit_amount);
-        let to_liquidate = base_strategy::withdraw_strategy_coin<StrategyWitness, ProductCoin<StrategyWitness, BaseCoin>>(
-            &harvest_lock,
-            to_liquidate_amount
-        );
-
-        let base_coins = product::liquidate<StrategyWitness, BaseCoin>(to_liquidate);
-        let debt_payment = coin::extract(&mut base_coins, debt_payment_amount);
-        let profit = coin::extract_all(&mut base_coins);
-        coin::destroy_zero(base_coins);
-
-        base_strategy::close_vault_for_harvest<StrategyWitness, BaseCoin, ProductCoin<StrategyWitness, BaseCoin>>(
-            harvest_lock,
-            debt_payment,
-            profit,
-            product_coins,
-        );
+        // this logic will vary by strategy
+        let base_coin_balance = coin::balance<BaseCoin>(signer::address_of(strategy_manager));
+        let base_coins = coin::withdraw<BaseCoin>(strategy_manager, base_coin_balance / 5);
+        satay::strategy_deposit<BaseCoin, MockStrategy, BaseCoin>(base_coins, MockStrategy {});
     }
 
     // user functions
 
-    /// liquidate strategy position if vault does not have enough liqidity for amount of VaultCoin<BaseCoin>
-    /// @param user - the transaction signer; must hold amount of VaultCoin<BaseCoin>
-    /// @param vault_id - the vault to liquidate
-    /// @param amount - the amount of VaultCoin<BaseCoin> to liquidate
-    public entry fun withdraw_for_user<BaseCoin>(
-        user: &signer,
-        vault_id: u64,
-        amount: u64
-    ) {
-        let vault_coins = coin::withdraw<VaultCoin<BaseCoin>>(user, amount);
-        let user_withdraw_lock = base_strategy::open_vault_for_user_withdraw<StrategyWitness, BaseCoin, ProductCoin<StrategyWitness, BaseCoin>>(
-            user,
-            vault_id,
-            vault_coins,
-            StrategyWitness {}
-        );
+    /// deposit BaseCoin into the strategy for user, mint StrategyCoin in return
+    /// * user: &signer - must hold amount of BaseCoin
+    /// * amount: u64 - the amount of BaseCoin to deposit
+    public entry fun deposit<BaseCoin>(user: &signer, amount: u64) {
+        let base_coins = coin::withdraw<BaseCoin>(user, amount);
+        let strategy_coins = apply(base_coins);
+        if(!coin::is_account_registered<StrategyCoin<BaseCoin, MockStrategy>>(signer::address_of(user))) {
+            coin::register<StrategyCoin<BaseCoin, MockStrategy>>(user);
+        };
+        coin::deposit(signer::address_of(user), strategy_coins);
+    }
 
-        let amount_needed = base_strategy::get_user_withdraw_amount_needed(&user_withdraw_lock);
-        let product_coin_amount = product::calc_product_coin_amount<StrategyWitness, BaseCoin>(amount_needed);
-        let product_coins = base_strategy::withdraw_strategy_coin_for_liquidation<StrategyWitness, ProductCoin<StrategyWitness, BaseCoin>, BaseCoin>(
-            &user_withdraw_lock,
-            product_coin_amount,
-        );
-        let base_coins = product::liquidate<StrategyWitness, BaseCoin>(product_coins);
+    /// burn StrategyCoin for user, withdraw BaseCoin from the strategy in return
+    /// * user: &signer - must hold amount of StrategyCoin
+    /// * amount: u64 - the amount of StrategyCoin to burn
+    public entry fun withdraw<BaseCoin>(user: &signer, amount: u64) {
+        let strategy_coins = coin::withdraw<StrategyCoin<AptosCoin, MockStrategy>>(user, amount);
+        let aptos_coins = liquidate(strategy_coins);
+        coin::deposit(signer::address_of(user), aptos_coins);
+    }
 
-        base_strategy::close_vault_for_user_withdraw<StrategyWitness, BaseCoin>(
-            user_withdraw_lock,
-            base_coins
-        );
+    /// convert BaseCoin into StrategyCoin
+    /// * base_coins: Coin<BaseCoin> - the BaseCoin to convert
+    public fun apply<BaseCoin>(base_coins: Coin<BaseCoin>): Coin<StrategyCoin<BaseCoin, MockStrategy>> {
+        let base_coin_value = coin::value(&base_coins);
+        satay::strategy_deposit<BaseCoin, MockStrategy, BaseCoin>(base_coins, MockStrategy {});
+        satay::strategy_mint<BaseCoin, MockStrategy>(base_coin_value, MockStrategy {})
+    }
+
+    /// convert StrategyCoin into BaseCoin
+    /// * strategy_coins: Coin<StrategyCoin<BaseCoin, MockStrategy>> - the StrategyCoin to convert
+    public fun liquidate<BaseCoin>(strategy_coins: Coin<StrategyCoin<BaseCoin, MockStrategy>>): Coin<BaseCoin> {
+        let strategy_coin_value = coin::value(&strategy_coins);
+        satay::strategy_burn(strategy_coins, MockStrategy {});
+        satay::strategy_withdraw<BaseCoin, MockStrategy, BaseCoin>(strategy_coin_value, MockStrategy {})
+    }
+
+    // calculations
+
+    /// calculate the amount of product coins that can be minted for a given amount of base coins
+    /// * product_coin_amount: u64 - the amount of ProductCoin<BaseCoin> to be converted
+    public fun calc_base_coin_amount<BaseCoin>(strategy_coin_amount: u64): u64 {
+        let base_coin_balance = satay::get_strategy_balance<BaseCoin, MockStrategy, BaseCoin>();
+        let strategy_coin_supply_option = coin::supply<StrategyCoin<BaseCoin, MockStrategy>>();
+        let strategy_coin_supply = option::get_with_default(&strategy_coin_supply_option, 0);
+        if(strategy_coin_supply == 0) {
+            return base_coin_balance
+        };
+        math::calculate_proportion_of_u64_with_u128_denominator(
+            base_coin_balance,
+            strategy_coin_amount,
+            strategy_coin_supply,
+        )
+    }
+
+    /// calculate the amount of base coins that can be liquidated for a given amount of product coins
+    /// * base_coin_amount: u64 - the amount of BaseCoin to be converted
+    public fun calc_product_coin_amount<BaseCoin>(base_coin_amount: u64): u64 {
+        let base_coin_balance = satay::get_strategy_balance<BaseCoin, MockStrategy, BaseCoin>();
+        let strategy_coin_supply_option = coin::supply<StrategyCoin<BaseCoin, MockStrategy>>();
+        if(base_coin_balance == 0) {
+            return base_coin_amount
+        };
+        math::mul_u128_u64_div_u64_result_u64(
+            option::get_with_default(&strategy_coin_supply_option, 0),
+            base_coin_amount,
+            base_coin_balance,
+        )
+    }
+
+    // getters
+
+    /// gets the address of the product account for BaseCoin
+    public fun get_strategy_account_address<BaseCoin>(): address
+    {
+        satay::get_strategy_address<BaseCoin, MockStrategy>()
+    }
+
+    /// gets the witness for the MockStrategy
+    public(friend) fun get_strategy_witness(): MockStrategy {
+        MockStrategy {}
     }
 }
